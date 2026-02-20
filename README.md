@@ -17,11 +17,14 @@
 ## Features
 
 - Detect Odoo version and metadata
-- Enumerate databases and accessible models
+- Enumerate databases, accessible models, installed modules, and model fields
 - Authenticate and check CRUD permissions
 - Extract data from specific models
 - Brute-force login credentials & Master password
 - Brute-force internal model names
+- Timing-based user enumeration via bcrypt oracle
+- Misconfiguration scanning (SSRF, default creds, DB manager, debug mode, etc.)
+- Public CVE checker with 10 safe active checks (LFI, XSS, SSTI, RCE, and more)
 - Extensible plugin system for security assessments
 
 ## Screenshots
@@ -131,6 +134,28 @@ odoomap -u https://example.com -D database_name -U admin -P pass -e -B --model-f
 odoomap -u https://example.com -D database_name -U admin -P pass -r -e -pe -d res.users -o ./output
 ```
 
+## Module & Field Enumeration
+
+#### Enumerate Installed Modules (Pre-Auth + Auth)
+
+```bash
+odoomap -u https://example.com --modules
+odoomap -u https://example.com -D database_name -U admin -P pass --modules
+```
+
+#### Enumerate Fields on a Model
+
+```bash
+odoomap -u https://example.com -D database_name -U admin -P pass --fields res.users
+```
+
+#### Timing-Based User Enumeration
+
+```bash
+odoomap -u https://example.com -D database_name --user-enum
+odoomap -u https://example.com -D database_name --user-enum --usernames custom_users.txt
+```
+
 ## Plugin System
 
 #### List Available Plugins
@@ -145,6 +170,18 @@ odoomap --list-plugins
 odoomap -u https://example.com --plugin cve-scanner
 ```
 
+#### Run Misconfiguration Scanner
+
+```bash
+odoomap -u https://example.com -D database_name --plugin misconfig-scanner
+```
+
+#### Run Public CVE Checker
+
+```bash
+odoomap -u https://example.com -D database_name -U admin -P pass --plugin public-cve-checker
+```
+
 #### Run Plugin with Authentication
 
 ```bash
@@ -155,7 +192,10 @@ odoomap -u https://example.com -D database_name -U admin -P pass --plugin cve-sc
 ## Full Usage
 
 ```
-usage: odoomap.py [-h] [-u URL] [-D DATABASE] [-U USERNAME] [-P [PASSWORD]] [-r] [-e] [-pe] [-l LIMIT] [-o OUTPUT] [-d DUMP] [-B] [--model-file MODEL_FILE] [-b] [-w WORDLIST] [--usernames USERNAMES] [--passwords PASSWORDS] [-M] [-p MASTER_PASS] [-n] [-N DB_NAMES_FILE] [--plugin PLUGIN] [--list-plugins]        
+usage: odoomap.py [-h] [-u URL] [-D DATABASE] [-U USERNAME] [-P [PASSWORD]] [-r] [-e] [-pe] [-l LIMIT] [-o OUTPUT]
+                  [-d DUMP] [-B] [--model-file MODEL_FILE] [--rate RATE] [--jitter PERCENT] [-b] [-w WORDLIST]
+                  [--usernames USERNAMES] [--passwords PASSWORDS] [-M] [-p MASTER_PASS] [-n] [-N DB_NAMES_FILE]
+                  [--user-enum] [--modules] [--fields MODEL] [--plugin PLUGIN] [--list-plugins]
 
 Odoo Security Assessment Tool
 
@@ -173,13 +213,13 @@ options:
   -pe, --permissions    Enumerate model permissions (requires -e)
   -l, --limit LIMIT     Limit results for enumeration or dump operations
   -o, --output OUTPUT   Output file for results
-  -d, --dump DUMP       Dump data from specified model(s); accepts a comma-separated list or a file path containing model names (one per line)
+  -d, --dump DUMP       Dump data from specified model(s); accepts a comma-separated list or a file path
   -B, --bruteforce-models
                         Bruteforce model names instead of listing them (default if listing fails)
   --model-file MODEL_FILE
                         File containing model names for bruteforcing (one per line)
   --rate RATE           Maximum requests per second (default: unlimited, 0 = unlimited)
-  --jitter PERCENT      Add random jitter as percentage of rate (e.g., --jitter 20 for ±20%) to avoid pattern detection
+  --jitter PERCENT      Add random jitter as percentage of rate (e.g., --jitter 20 for ±20%)
   -b, --bruteforce      Bruteforce login credentials (requires -D)
   -w, --wordlist WORDLIST
                         Wordlist file for bruteforcing in user:pass format
@@ -194,6 +234,9 @@ options:
   -n, --brute-db-names  Bruteforce database names
   -N, --db-names-file DB_NAMES_FILE
                         File containing database names for bruteforcing (case-sensitive)
+  --user-enum           Timing-based user enumeration (requires -D)
+  --modules             Enumerate installed modules (pre-auth + auth)
+  --fields MODEL        Enumerate fields on a model (requires auth)
   --plugin PLUGIN       Run a specific plugin by name (from odoomap/plugins/)
   --list-plugins        List all available plugins with metadata
 ```
@@ -205,6 +248,8 @@ OdooMap features an extensible plugin system for custom security assessments. Pl
 ### Built-in Plugins
 
 - **CVE Scanner**: Searches for known CVEs affecting the detected Odoo version using the NVD database
+- **Misconfiguration Scanner**: Checks for common Odoo misconfigurations — version disclosure, DB manager exposure, default credentials, weak master passwords, open registration, SSRF via link preview, livechat SSRF chain, user enumeration timing, XML-RPC exposure, and debug mode access
+- **Public CVE Checker**: Tests Odoo instances against publicly-disclosed CVEs with safe active checks — LFI (CVE-2019-14322), reflected XSS (CVE-2023-1434), DB manager bypass (CVE-2018-14885), pickle RCE (CVE-2017-10803), SSTI via safe_eval (CVE-2018-14860), demo data injection (CVE-2021-45111), mail oracle (CVE-2024-36259), SSTI on Odoo <=14, template editor SSTI on Odoo 18, and NixOS path traversal (CVE-2026-25137)
 
 ### Creating Custom Plugins
 

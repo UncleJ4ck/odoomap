@@ -10,14 +10,13 @@ from .utils.colors import Colors
 from .plugin_manager import load_specific_plugin, list_available_plugins, get_plugin_info
 from urllib.parse import urlparse, urlunparse
 from rich.console import Console
+from importlib.resources import files
 
 console = Console()
 
 def on_sigint(signum, frame):
     console.print("\n[yellow][!][/yellow] [white]Interrupted by user. Exiting...[/white]")
-
     console.show_cursor(show=True)
-    
     sys.exit(0)
 
 signal.signal(signal.SIGINT, on_sigint)
@@ -25,48 +24,41 @@ signal.signal(signal.SIGINT, on_sigint)
 def banner():
     return Colors.HEADER + r'''
 _______________________________________________________________
-                   _                                   
-          ___   __| | ___   ___  _ __ ___   __ _ _ __  
-         / _ \ / _` |/ _ \ / _ \| '_ ` _ \ / _` | '_ \ 
+                   _
+          ___   __| | ___   ___  _ __ ___   __ _ _ __
+         / _ \ / _` |/ _ \ / _ \| '_ ` _ \ / _` | '_ \
         | (_) | (_| | (_) | (_) | | | | | | (_| | |_) |
-         \___/ \__,_|\___/ \___/|_| |_| |_|\__,_| .__/ 
-                                                |_|  
+         \___/ \__,_|\___/ \___/|_| |_| |_|\__,_| .__/
+                                                |_|
 _______________________________________________________________
 ''' + Colors.ENDC + f'''
         Odoo Security Scanner by Mohamed Karrab @_karrab
         Version {__version__}
-    ''' 
+    '''
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Odoo Security Assessment Tool')
-    
-    # Target specification
+
     parser.add_argument('-u', '--url', help='Target Odoo server URL')
-    
-    # Authentication
+
     parser.add_argument('-D', '--database', help='Target database name')
     parser.add_argument('-U', '--username', help='Username for authentication')
     parser.add_argument('-P', '--password', nargs='?', const='', help='Password for authentication (prompts securely if no value provided)')
-    
-    # Operation modes
+
     parser.add_argument('-r', '--recon', action='store_true', help='Perform initial reconnaissance')
     parser.add_argument('-e', '--enumerate', action='store_true', help='Enumerate available model names')
     parser.add_argument('-pe', '--permissions', action='store_true', help='Enumerate model permissions (requires -e)')
     parser.add_argument('-l', '--limit', type=int, default=100, help='Limit results for enumeration or dump operations')
     parser.add_argument('-o', '--output', help='Output file for results')
-    
-    # Dump options
+
     parser.add_argument('-d', '--dump', help='Dump data from specified model(s); accepts a comma-separated list or a file path containing model names (one per line)')
-    
-    # Model enumeration options
+
     parser.add_argument('-B', '--bruteforce-models', action='store_true', help='Bruteforce model names instead of listing them (default if listing fails)')
     parser.add_argument('--model-file', help='File containing model names for bruteforcing (one per line)')
-    
-    # Rate limiting
+
     parser.add_argument('--rate', type=float, help='Maximum requests per second (default: unlimited, 0 = unlimited)')
     parser.add_argument('--jitter', type=float, metavar='PERCENT', help='Add random jitter as percentage of rate (e.g., --jitter 20 for ±20%%) to avoid pattern detection')
-    
-    # Other operations
+
     parser.add_argument('-b', '--bruteforce', action='store_true', help='Bruteforce login credentials (requires -D)')
     parser.add_argument('-w', '--wordlist', help='Wordlist file for bruteforcing in user:pass format')
     parser.add_argument('--usernames', help='File containing usernames for bruteforcing (one per line)')
@@ -74,47 +66,51 @@ def parse_arguments():
     parser.add_argument('-M', '--bruteforce-master', action='store_true', help="Bruteforce the database's master password")
     parser.add_argument('-p','--master-pass', help='Wordlist file for master password bruteforcing (one password per line)')
 
-    # bruteforce database names
     parser.add_argument('-n','--brute-db-names', action='store_true', help='Bruteforce database names')
     parser.add_argument('-N','--db-names-file', help='File containing database names for bruteforcing (case-sensitive)')
 
-    # plugin execution
+    parser.add_argument('--user-enum', action='store_true', help='Timing-based user enumeration (requires -D)')
+    parser.add_argument('--modules', action='store_true', help='Enumerate installed modules (pre-auth + auth)')
+    parser.add_argument('--fields', metavar='MODEL', help='Enumerate fields on a model (requires auth)')
+
     parser.add_argument('--plugin', help='Run a specific plugin by name (from odoomap/plugins/)')
     parser.add_argument('--list-plugins', action='store_true', help='List all available plugins with metadata')
 
     args = parser.parse_args()
-    
-    # Handle secure password prompt if -P was provided without a value
+
     if args.password == '':
         try:
             args.password = getpass.getpass(f"{Colors.i} Enter password: ")
         except KeyboardInterrupt:
             console.print("\n[yellow][!][/yellow] [white]Password prompt cancelled. Exiting...[/white]")
             sys.exit(0)
-    
-    # Validate URL requirement (not needed for --list-plugins)
+
     if not args.list_plugins and not args.url:
         parser.error("the following arguments are required: -u/--url (except when using --list-plugins)")
-    
-    # Validate argument combinations
+
     if args.permissions and not args.enumerate:
         parser.error("--permissions requires --enumerate")
-    
+
     if args.bruteforce and not args.database:
         parser.error("--bruteforce requires --database")
+
+    if args.user_enum and not args.database:
+        parser.error("--user-enum requires --database (-D)")
+
+    if args.fields and not (args.username and args.password and args.database):
+        parser.error("--fields requires authentication (-U, -P, -D)")
 
     return args
 
 def main():
     args = parse_arguments()
 
-    # Handle --list-plugins early (no connection needed)
     if args.list_plugins:
         plugins_info = get_plugin_info()
         if not plugins_info:
             print(f"{Colors.w} No plugins found in odoomap/plugins/")
             return
-        
+
         print(f"{Colors.s} Available Plugins:\n")
         for plugin_name, info in plugins_info.items():
             print(f"{Colors.i} {info['name']} ({plugin_name}) v{info['version']}")
@@ -130,33 +126,28 @@ def main():
             print()
         return
 
-    # Check if we have all authentication parameters
     has_auth_params = args.username and args.password and args.database
-    auth_required_ops = args.enumerate or args.dump or args.permissions or args.bruteforce_models
+    auth_required_ops = args.enumerate or args.dump or args.permissions or args.bruteforce_models or args.fields
 
-    # Check if any action is specified (besides recon)
-    any_action = args.enumerate or args.dump or args.bruteforce or args.permissions or args.bruteforce_models or args.bruteforce_master or args.brute_db_names or args.plugin or args.list_plugins
+    any_action = (args.enumerate or args.dump or args.bruteforce or args.permissions
+                  or args.bruteforce_models or args.bruteforce_master or args.brute_db_names
+                  or args.plugin or args.list_plugins or args.user_enum or args.modules or args.fields)
 
-    # Determine if recon should be performed
     do_recon = args.recon or not any_action
 
     print(banner())
     print(f"{Colors.i} Target: {Colors.FAIL}{args.url}{Colors.ENDC}")
-    
-    # Display rate limiting info
+
     if args.rate:
         rate_info = f"{args.rate} req/s"
         if args.jitter:
             rate_info += f" (±{args.jitter}% jitter)"
         print(f"{Colors.i} Rate limit: {rate_info}")
 
-    # Initialize connection WITH rate limiting
     connection = connect.Connection(host=args.url, rate_limit=args.rate, jitter=args.jitter)
 
-    # --- Odoo check before authentication ---
     version = connection.get_version()
     if not version:
-        # Try base URL if the given one fails
         parsed = urlparse(args.url)
         base_url = urlunparse((parsed.scheme, parsed.netloc, '/', '', '', ''))
         if base_url.endswith('//'):
@@ -169,7 +160,7 @@ def main():
             response = input(f"{Colors.i} Use {base_url} as target? [y/N]: ").strip().lower()
             if response == 'y' or response == 'yes':
                 print(f"{Colors.i} Updated target {Colors.FAIL}{base_url}{Colors.ENDC}")
-                args.url = base_url  # Update target for rest of script
+                args.url = base_url
             else:
                 print(f"{Colors.e} Aborting, please provide a valid Odoo URL.")
                 sys.exit(1)
@@ -179,37 +170,23 @@ def main():
     else:
         print(f"{Colors.s} Odoo detected (version: {version})")
 
-    # --- Master password bruteforce ---
     if args.bruteforce_master:
         wordlist = args.master_pass
         actions.bruteforce_master_password(connection, wordlist)
-        # If only master bruteforce was requested, exit after
         if not (args.bruteforce or args.enumerate or args.dump or args.permissions or args.recon):
             sys.exit(0)
 
-    # Authenticate if needed for further operations
     if auth_required_ops and has_auth_params:
         uid = connection.authenticate(args.database, args.username, args.password)
-        
     elif auth_required_ops and not has_auth_params:
         print(f"{Colors.e} Authentication required for the requested operation")
         print(f"{Colors.e} Please provide -U username, -P password, and -D database")
         if not args.bruteforce:
             sys.exit(1)
 
-    # Perform recon if requested or if no other action is specified
     if do_recon:
         print(f"{Colors.i} Performing reconnaissance...")
-        """
-        version = connection.get_version()
-        if not version:
-            print(f"{Colors.e} Failed to connect to Odoo server or determine version")
-            sys.exit(1)
 
-        print(f"{Colors.s} Detected Odoo version: {version}")
-        """
-        
-        # List databases
         dbs = connection.get_databases()
         if dbs:
             print(f"{Colors.s} Found {len(dbs)} database(s):")
@@ -218,21 +195,16 @@ def main():
         else:
             print(f"{Colors.w} No databases found or listing is disabled")
 
-        # Check portal
         portal = connection.registration_check()
-
-        # Check default apps
         apps = connection.default_apps_check()
 
-    # --- Bruteforce database names if requested ---
     if args.brute_db_names:
         if not args.db_names_file:
             print(f"{Colors.e} Use -N <file> to specify a file containing database names (case-sensitive).")
             sys.exit(1)
         print(f"{Colors.i} Bruteforcing database names using file: {args.db_names_file}")
         connection.bruteforce_database_names(args.db_names_file)
-    
-    # Bruteforce
+
     if args.bruteforce:
         print(f"{Colors.i} Starting bruteforce login...")
         if not (args.wordlist or args.usernames or args.passwords):
@@ -240,10 +212,28 @@ def main():
         connection.bruteforce_login(args.database, wordlist_file=args.wordlist,
                                 usernames_file=args.usernames, passwords_file=args.passwords)
 
-    # Enumerate models
+    if args.user_enum:
+        usernames = []
+        if args.usernames:
+            with open(args.usernames, 'r') as f:
+                usernames = [line.strip() for line in f if line.strip()]
+        else:
+            usernames_text = files("odoomap.data").joinpath("default_usernames.txt").read_text(encoding='utf-8')
+            usernames = [line.strip() for line in usernames_text.splitlines() if line.strip()]
+            print(f"{Colors.i} Using {len(usernames)} default usernames")
+        connection.enumerate_users_timing(args.database, usernames)
+
+    if args.modules:
+        actions.enumerate_modules(connection)
+
+    if args.fields:
+        if has_auth_params and not connection.uid:
+            connection.authenticate(args.database, args.username, args.password)
+        actions.enumerate_fields(connection, args.fields)
+
     if args.enumerate and connection.uid:
-        models = actions.get_models(connection, limit=args.limit, 
-                               with_permissions=args.permissions, 
+        models = actions.get_models(connection, limit=args.limit,
+                               with_permissions=args.permissions,
                                bruteforce=args.bruteforce_models,
                                model_file=args.model_file)
         if models:
@@ -252,10 +242,10 @@ def main():
                     for model in models:
                         f.write(f"{model}\n")
                 print(f"\n{Colors.s} Model list saved to {args.output}")
-                
+
     elif args.bruteforce_models and connection.uid:
-        models = actions.bruteforce_models(connection, limit=args.limit, 
-                                           with_permissions=args.permissions, 
+        models = actions.bruteforce_models(connection, limit=args.limit,
+                                           with_permissions=args.permissions,
                                            model_file=args.model_file)
         if models:
             if args.output:
@@ -266,11 +256,9 @@ def main():
                         f.write(f"{model}\n")
                 print(f"\n{Colors.s} Bruteforced model list saved to {output_file}")
 
-    # Dump model data
     if args.dump and connection.uid:
         models_to_dump = []
 
-        # Check if the dump argument is a file path
         if os.path.isfile(args.dump):
             print(f"\n{Colors.i} Reading model list from file: {args.dump}")
             try:
@@ -292,7 +280,6 @@ def main():
             print(f"{Colors.i} Dumping {model_name} to {output_file}")
             actions.dump_model(connection, model_name, limit=args.limit, output_file=output_file)
 
-
     if args.plugin:
         try:
             plugin_instance = load_specific_plugin(args.plugin)
@@ -304,13 +291,11 @@ def main():
 
         try:
             result = plugin_instance.run(
-            # Passing all the necessary connection/auth information.
-                args.url, 
+                args.url,
                 database=args.database,
                 username=args.username,
                 password=args.password,
                 connection=connection
-                # add args that plugins might need.
             )
             print(f"{Colors.s} Plugin '{args.plugin}' finished. Result:\n{result}")
 

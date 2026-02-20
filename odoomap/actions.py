@@ -319,3 +319,88 @@ def bruteforce_master_password(connection, wordlist_file=None):
 
     display.stop()
     return None
+
+
+def enumerate_modules(connection):
+    print(f"{Colors.i} Enumerating installed modules...")
+
+    module_paths_text = files("odoomap.data").joinpath("module_paths.txt").read_text(encoding="utf-8")
+    path_map = {}
+    for line in module_paths_text.splitlines():
+        line = line.strip()
+        if "=" in line:
+            path, module = line.split("=", 1)
+            path_map[path.strip()] = module.strip()
+
+    detected = []
+    print(f"{Colors.i} Pre-auth path probing ({len(path_map)} paths)...")
+    from urllib.parse import urljoin
+    for path, module in path_map.items():
+        try:
+            url = urljoin(connection.host.rstrip("/") + "/", path.lstrip("/"))
+            resp = connection.session.get(url, timeout=10, allow_redirects=False)
+            if resp.status_code in (200, 301, 302, 303):
+                print(f"{Colors.s} {path} -> {module} (HTTP {resp.status_code})")
+                detected.append(module)
+            else:
+                pass
+        except Exception:
+            pass
+
+    if connection.uid:
+        print(f"{Colors.i} Querying ir.module.module (authenticated)...")
+        try:
+            modules = connection.models.execute_kw(
+                connection.db, connection.uid, connection.password,
+                'ir.module.module', 'search_read',
+                [[['state', '=', 'installed']]],
+                {'fields': ['name', 'shortdesc', 'state'], 'limit': 0})
+            for mod in modules:
+                name = mod['name']
+                if name not in detected:
+                    detected.append(name)
+                print(f"{Colors.s} {name} - {mod.get('shortdesc', '')}")
+            print(f"{Colors.i} {len(modules)} installed modules found via ORM")
+        except Exception as e:
+            print(f"{Colors.e} ir.module.module query failed: {e}")
+
+    if not detected:
+        print(f"{Colors.w} No modules detected")
+    else:
+        print(f"{Colors.s} {len(detected)} unique module(s) detected total")
+    return detected
+
+
+def enumerate_fields(connection, model_name):
+    if not connection.uid:
+        print(f"{Colors.e} Not authenticated. Please authenticate first.")
+        return {}
+
+    print(f"{Colors.i} Enumerating fields on {model_name}...")
+    try:
+        fields_info = connection.models.execute_kw(
+            connection.db, connection.uid, connection.password,
+            model_name, 'fields_get', [],
+            {'attributes': ['string', 'type', 'relation', 'store', 'groups']})
+
+        for fname, fdata in sorted(fields_info.items()):
+            ftype = fdata.get('type', '?')
+            label = fdata.get('string', '')
+            stored = 'stored' if fdata.get('store') else 'computed'
+            groups = fdata.get('groups', '')
+            relation = fdata.get('relation', '')
+
+            extra = []
+            if relation:
+                extra.append(f"-> {relation}")
+            if groups:
+                extra.append(f"groups={groups}")
+            extra.append(stored)
+
+            print(f"{Colors.s} {fname} ({ftype}) {label} [{', '.join(extra)}]")
+
+        print(f"{Colors.i} {len(fields_info)} fields found on {model_name}")
+        return fields_info
+    except Exception as e:
+        print(f"{Colors.e} fields_get failed on {model_name}: {e}")
+        return {}
