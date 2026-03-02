@@ -23,8 +23,6 @@
 - Brute-force login credentials & Master password
 - Brute-force internal model names
 - Timing-based user enumeration via bcrypt oracle
-- Misconfiguration scanning (SSRF, default creds, DB manager, debug mode, etc.)
-- Public CVE checker with 10 safe active checks (LFI, XSS, SSTI, RCE, and more)
 - Extensible plugin system for security assessments
 
 ## Screenshots
@@ -170,18 +168,6 @@ odoomap --list-plugins
 odoomap -u https://example.com --plugin cve-scanner
 ```
 
-#### Run Misconfiguration Scanner
-
-```bash
-odoomap -u https://example.com -D database_name --plugin misconfig-scanner
-```
-
-#### Run Public CVE Checker
-
-```bash
-odoomap -u https://example.com -D database_name -U admin -P pass --plugin public-cve-checker
-```
-
 #### Run Old Odoo Privilege Escalation
 
 Attempts to escalate privileges on Odoo versions 9.0–14.x (requires authentication).
@@ -256,8 +242,6 @@ OdooMap features an extensible plugin system for custom security assessments. Pl
 ### Built-in Plugins
 
 - **CVE Scanner**: Searches for known CVEs affecting the detected Odoo version using the NVD database
-- **Misconfiguration Scanner**: Checks for common Odoo misconfigurations — version disclosure, DB manager exposure, default credentials, weak master passwords, open registration, SSRF via link preview, livechat SSRF chain, user enumeration timing, XML-RPC exposure, and debug mode access
-- **Public CVE Checker**: Tests Odoo instances against publicly-disclosed CVEs with safe active checks — LFI (CVE-2019-14322), reflected XSS (CVE-2023-1434), DB manager bypass (CVE-2018-14885), pickle RCE (CVE-2017-10803), SSTI via safe_eval (CVE-2018-14860), demo data injection (CVE-2021-45111), mail oracle (CVE-2024-36259), SSTI on Odoo <=14, template editor SSTI on Odoo 18, and NixOS path traversal (CVE-2026-25137)
 - **Old Odoo Privilege Escalation**: Attempts to escalate the authenticated user's privileges by exploiting arbitrary Python execution via safe_eval in Odoo versions 9.0–14.x 
 
 ### Creating Custom Plugins
