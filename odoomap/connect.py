@@ -18,7 +18,6 @@ from .utils.brute_display import BruteDisplay, console
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class ThrottledServerProxy:
-    """Wrapper around xmlrpc ServerProxy that auto-throttles all calls"""
     def __init__(self, uri, context, throttle_func):
         self._proxy = xmlrpc.client.ServerProxy(uri, context=context)
         self._throttle = throttle_func
@@ -33,7 +32,6 @@ class ThrottledServerProxy:
         return attr
 
 class ThrottledSession(requests.Session):
-    """Wrapper around requests.Session that auto-throttles all HTTP calls"""
     def __init__(self, throttle_func):
         super().__init__()
         self._throttle = throttle_func
@@ -47,12 +45,10 @@ class Connection:
         self.host = host if host.startswith(('http://', 'https://')) else f"https://{host}"
         self.ssl_verify = ssl_verify
         
-        # Rate limiting config
-        self.rate_limit = rate_limit  # requests per second (None = unlimited)
-        self.jitter = jitter          # jitter percentage (e.g., 20 for ±20%)
+        self.rate_limit = rate_limit
+        self.jitter = jitter
         self.last_request_time = 0
-        
-        # Use throttled session
+
         self.session = ThrottledSession(self._throttle)
         self.session.verify = ssl_verify
         
@@ -95,6 +91,92 @@ class Connection:
             
             self.last_request_time = time.time()
     
+    def jsonrpc(self, endpoint, params=None):
+        url = f"{self.host}{endpoint}"
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "call",
+            "id": random.randint(1, 1_000_000),
+            "params": params or {},
+        }
+        resp = self.session.post(url, json=payload, timeout=15)
+        resp.raise_for_status()
+        body = resp.json()
+        if "error" in body:
+            err = body["error"]
+            msg = err.get("data", {}).get("message") or err.get("message", str(err))
+            raise Exception(f"JSON-RPC error: {msg}")
+        return body.get("result")
+
+    def json_authenticate(self, db, login, password):
+        try:
+            result = self.jsonrpc("/web/session/authenticate", {
+                "db": db,
+                "login": login,
+                "password": password,
+            })
+            if result and result.get("uid"):
+                return result
+            return None
+        except Exception:
+            return None
+
+    def json_call_kw(self, model, method, args=None, kwargs=None):
+        return self.jsonrpc("/web/dataset/call_kw", {
+            "model": model,
+            "method": method,
+            "args": args or [],
+            "kwargs": kwargs or {},
+        })
+
+    def json_search_count(self, model, domain=None):
+        return self.json_call_kw(model, "search_count", [domain or []])
+
+    def json_search_read(self, model, domain=None, fields=None, limit=0):
+        return self.json_call_kw(model, "search_read", [domain or []], {
+            "fields": fields or [],
+            "limit": limit,
+        })
+
+    def enumerate_users_via_timing_attack(self, db, usernames, samples=3):
+        def measure(login):
+            times = []
+            for _ in range(samples):
+                start = time.time()
+                try:
+                    self.jsonrpc("/web/session/authenticate", {
+                        "db": db, "login": login,
+                        "password": "odoomap_timing_probe_" + str(random.randint(0, 99999)),
+                    })
+                except Exception:
+                    pass
+                times.append(time.time() - start)
+            return sorted(times)[len(times) // 2]
+
+        print(f"{Colors.i} Calibrating with known-invalid username...")
+        baseline = measure(f"definitely_nonexistent_{random.randint(100000,999999)}@invalid.test")
+        threshold_multiplier = 2
+        threshold = baseline * threshold_multiplier
+        print(f"{Colors.i} Baseline: {baseline*1000:.0f}ms, threshold: {threshold*1000:.0f}ms ({threshold_multiplier}x)")
+
+        found = []
+        total = len(usernames)
+        display = BruteDisplay(total)
+        console.print("")
+        for username in usernames:
+            display.update(f"{Colors.t} {username}")
+            median_time = measure(username)
+            if median_time >= threshold:
+                display.add_success(f"{username} ({median_time*1000:.0f}ms vs {baseline*1000:.0f}ms baseline)\n")
+                found.append(username)
+
+        display.stop()
+        if found:
+            print(f"{Colors.s} {len(found)} likely valid account(s) found")
+        else:
+            print(f"{Colors.w} No valid accounts detected via timing")
+        return found
+
     def get_version(self):
         """Get Odoo version information"""
         try:
@@ -178,17 +260,9 @@ class Connection:
             return text
         return ''.join(c for c in text if c != '\x00' and ord(c) < 128 and c.isprintable())
 
-    def bruteforce_database_names(self, db_names_file):
-        """Bruteforce database names using a wordlist file"""
-        
-        try:
-            with open(db_names_file, 'r', encoding='utf-8', errors='ignore') as f:
-                databases = [line.strip() for line in f if line.strip()]
-        except Exception as e:
-            print(f"{Colors.e} Error reading database names file: {str(e)}")
-            return False
+    def bruteforce_database_names(self, databases):
+        """Bruteforce database names using a list of candidates"""
 
-        print(f"{Colors.s} Loaded {len(databases)} database names from {db_names_file}")
         print(f"{Colors.i} Starting database name bruteforce with {len(databases)} candidates")
 
         total = len(databases)
@@ -371,7 +445,7 @@ class Connection:
                     app_info["title"] = soup.title.string
 
                 paths = [
-                    "/web", "/shop", "/forum", "/contactus",
+                    "/web/database/manager", "/web/database/selector", "/web", "/shop", "/forum", "/contactus",
                     "/website/info", "/blog", "/events",
                     "/jobs", "/slides"
                 ]
