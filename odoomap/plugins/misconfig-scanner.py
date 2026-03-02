@@ -400,7 +400,7 @@ class Plugin(BasePlugin):
         if not database:
             return None
         try:
-            fake_user = "odoomap_nonexistent_user_timing_test_xyz"
+            fake_user = "definitely_nonexistent_user_timing_test_xyz"
             real_user = "admin"
             samples = 3
 

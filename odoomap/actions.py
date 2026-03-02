@@ -339,13 +339,16 @@ def enumerate_modules(connection):
         try:
             url = urljoin(connection.host.rstrip("/") + "/", path.lstrip("/"))
             resp = connection.session.get(url, timeout=10, allow_redirects=False)
-            if resp.status_code in (200, 301, 302, 303):
+            if resp.status_code in range(200, 300) or resp.status_code in (301, 302, 303, 307, 308, 400, 401, 403, 405, 415, 500):
                 print(f"{Colors.s} {path} -> {module} (HTTP {resp.status_code})")
                 detected.append(module)
             else:
                 pass
         except Exception:
             pass
+
+    if not connection.uid:
+        print(f"{Colors.w} Not authenticated, provide -D, -U, -P to enable post-auth module enumeration")
 
     if connection.uid:
         print(f"{Colors.i} Querying ir.module.module (authenticated)...")

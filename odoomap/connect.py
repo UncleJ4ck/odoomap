@@ -138,7 +138,7 @@ class Connection:
             "limit": limit,
         })
 
-    def enumerate_users_timing(self, db, usernames, samples=3):
+    def enumerate_users_via_timing_attack(self, db, usernames, samples=3):
         def measure(login):
             times = []
             for _ in range(samples):
@@ -154,9 +154,10 @@ class Connection:
             return sorted(times)[len(times) // 2]
 
         print(f"{Colors.i} Calibrating with known-invalid username...")
-        baseline = measure(f"odoomap_nonexistent_{random.randint(100000,999999)}@invalid.test")
-        threshold = baseline * 2.0
-        print(f"{Colors.i} Baseline: {baseline*1000:.0f}ms, threshold: {threshold*1000:.0f}ms")
+        baseline = measure(f"definitely_nonexistent_{random.randint(100000,999999)}@invalid.test")
+        threshold_multiplier = 2
+        threshold = baseline * threshold_multiplier
+        print(f"{Colors.i} Baseline: {baseline*1000:.0f}ms, threshold: {threshold*1000:.0f}ms ({threshold_multiplier}x)")
 
         found = []
         total = len(usernames)
@@ -259,17 +260,9 @@ class Connection:
             return text
         return ''.join(c for c in text if c != '\x00' and ord(c) < 128 and c.isprintable())
 
-    def bruteforce_database_names(self, db_names_file):
-        """Bruteforce database names using a wordlist file"""
-        
-        try:
-            with open(db_names_file, 'r', encoding='utf-8', errors='ignore') as f:
-                databases = [line.strip() for line in f if line.strip()]
-        except Exception as e:
-            print(f"{Colors.e} Error reading database names file: {str(e)}")
-            return False
+    def bruteforce_database_names(self, databases):
+        """Bruteforce database names using a list of candidates"""
 
-        print(f"{Colors.s} Loaded {len(databases)} database names from {db_names_file}")
         print(f"{Colors.i} Starting database name bruteforce with {len(databases)} candidates")
 
         total = len(databases)
@@ -452,7 +445,7 @@ class Connection:
                     app_info["title"] = soup.title.string
 
                 paths = [
-                    "/web", "/shop", "/forum", "/contactus",
+                    "/web/database/manager", "/web/database/selector", "/web", "/shop", "/forum", "/contactus",
                     "/website/info", "/blog", "/events",
                     "/jobs", "/slides"
                 ]

@@ -69,7 +69,7 @@ def parse_arguments():
     parser.add_argument('-n','--brute-db-names', action='store_true', help='Bruteforce database names')
     parser.add_argument('-N','--db-names-file', help='File containing database names for bruteforcing (case-sensitive)')
 
-    parser.add_argument('--user-enum', action='store_true', help='Timing-based user enumeration (requires -D)')
+    parser.add_argument('--enum-users', action='store_true', help='Timing-based user enumeration (requires -D)')
     parser.add_argument('--modules', action='store_true', help='Enumerate installed modules (pre-auth + auth)')
     parser.add_argument('--fields', metavar='MODEL', help='Enumerate fields on a model (requires auth)')
 
@@ -89,13 +89,13 @@ def parse_arguments():
         parser.error("the following arguments are required: -u/--url (except when using --list-plugins)")
 
     if args.permissions and not args.enumerate:
-        parser.error("--permissions requires --enumerate")
+        parser.error("--permissions requires --enumerate (-e)")
 
     if args.bruteforce and not args.database:
-        parser.error("--bruteforce requires --database")
+        parser.error("--bruteforce requires --database (-D)")
 
-    if args.user_enum and not args.database:
-        parser.error("--user-enum requires --database (-D)")
+    if args.enum_users and not args.database:
+        parser.error("--enum-users requires --database (-D)")
 
     if args.fields and not (args.username and args.password and args.database):
         parser.error("--fields requires authentication (-U, -P, -D)")
@@ -126,13 +126,16 @@ def main():
             print()
         return
 
+    # Check if all authentication parameters are provided
     has_auth_params = args.username and args.password and args.database
     auth_required_ops = args.enumerate or args.dump or args.permissions or args.bruteforce_models or args.fields
 
+    # Check if any action is specified (besides recon)
     any_action = (args.enumerate or args.dump or args.bruteforce or args.permissions
                   or args.bruteforce_models or args.bruteforce_master or args.brute_db_names
-                  or args.plugin or args.list_plugins or args.user_enum or args.modules or args.fields)
+                  or args.plugin or args.list_plugins or args.enum_users or args.modules or args.fields)
 
+    # Determine if recon should be performed
     do_recon = args.recon or not any_action
 
     print(banner())
@@ -199,11 +202,19 @@ def main():
         apps = connection.default_apps_check()
 
     if args.brute_db_names:
-        if not args.db_names_file:
-            print(f"{Colors.e} Use -N <file> to specify a file containing database names (case-sensitive).")
-            sys.exit(1)
-        print(f"{Colors.i} Bruteforcing database names using file: {args.db_names_file}")
-        connection.bruteforce_database_names(args.db_names_file)
+        if args.db_names_file:
+            try:
+                with open(args.db_names_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    db_names = [line.strip() for line in f if line.strip()]
+                print(f"{Colors.s} Loaded {len(db_names)} database names from {args.db_names_file}")
+            except Exception as e:
+                print(f"{Colors.e} Error reading database names file: {str(e)}")
+                sys.exit(1)
+        else:
+            db_names_text = files("odoomap.data").joinpath("default_dbnames.txt").read_text(encoding='utf-8')
+            db_names = [line.strip() for line in db_names_text.splitlines() if line.strip()]
+            print(f"{Colors.i} Using {len(db_names)} default database names (use -N <file> to specify a custom list)")
+        connection.bruteforce_database_names(db_names)
 
     if args.bruteforce:
         print(f"{Colors.i} Starting bruteforce login...")
@@ -212,7 +223,7 @@ def main():
         connection.bruteforce_login(args.database, wordlist_file=args.wordlist,
                                 usernames_file=args.usernames, passwords_file=args.passwords)
 
-    if args.user_enum:
+    if args.enum_users:
         usernames = []
         if args.usernames:
             with open(args.usernames, 'r') as f:
@@ -221,9 +232,11 @@ def main():
             usernames_text = files("odoomap.data").joinpath("default_usernames.txt").read_text(encoding='utf-8')
             usernames = [line.strip() for line in usernames_text.splitlines() if line.strip()]
             print(f"{Colors.i} Using {len(usernames)} default usernames")
-        connection.enumerate_users_timing(args.database, usernames)
+        connection.enumerate_users_via_timing_attack(args.database, usernames)
 
     if args.modules:
+        if has_auth_params and not connection.uid:
+            connection.authenticate(args.database, args.username, args.password)
         actions.enumerate_modules(connection)
 
     if args.fields:
